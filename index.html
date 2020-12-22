@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="http://fastly.ink.sapo.pt/3.1.10/css/ink.css">
+  <link rel="stylesheet" href="http://cdn.ink.sapo.pt/3.1.10/css/ink-flex.min.css">
+  <title>editor</title>
+</head>
+<body>
+
+<div id="app">
+  
+  <div class="column-group horizontal-gutters">
+    
+    <div class="all-70">
+      <figure class="ink-image">
+        <figcaption>
+          <input type="file" accept="image/*" value="ファイルを選択" @change="onFileChange">
+          <span>x: {{position.x}} y: {{position.y}}</span>
+          <div class="button-toolbar push-right">
+            <div class="button-group">
+              <button class="ink-button" @click="onGrayScale">GS</button>
+              <button class="ink-button" @click="onMono">MN</button>
+            </div>
+            <div class="button-group">
+              <button class="ink-button" @click="onBitwiseNot">BWN</button>
+              <button class="ink-button" @click="onMedian">MED</button>
+            </div>
+          </div>
+        </figcaption>
+        <canvas id="preview" @mousemove="onMouseMove"></canvas>
+      </figure>
+    </div>
+    
+    
+    <div class="all-30">
+      
+      <div class="ink-tabs top" data-prevent-url-change="true">
+        <ul class="tabs-nav">
+          <li><a class="tabs-tab" href="#formatEditor">Format</a></li>
+          <li><a class="tabs-tab" href="#formatOutput">Output</a></li>
+        </ul>
+        
+        <div id="formatEditor" class="tabs-content">
+          
+          <div v-for="(rectangle, index) in rectangles" :key="rectangles">
+            <input type="text" v-model="rectangle.id" placeholder="Identify">
+            <button type="button" class="ink-button red push-right" @click="deleteRect(index)">Delete</button>
+            <table class="ink-table">
+              <tr>
+                <th></th>
+                <th class="align-left">X</th>
+                <th class="align-left">Y</th>
+              </tr>
+              <tr>
+                <td>Start</td>
+                <td><input type="number" v-model="rectangle.vertices.start.x"></td>
+                <td><input type="number" v-model="rectangle.vertices.start.y"></td>
+              </tr>
+              <tr>
+                <td>End</td>
+                <td><input type="number" v-model="rectangle.vertices.end.x"></td>
+                <td><input type="number" v-model="rectangle.vertices.end.y"></td>
+              </tr>
+            </table>
+          </div>
+          
+          
+          <button type="button" @click="addRect">Add</button>
+        </div>
+        
+        <div id="formatOutput" class="tabs-content">
+          <pre><code>{{outputJson}}</code></pre>
+        </div>
+      
+      </div>
+    
+    </div>
+  
+  </div>
+</div>
+
+<script src="https://jp.vuejs.org/js/vue.js"></script>
+<script src="http://fastly.ink.sapo.pt/3.1.10/js/ink-all.js"></script>
+<script src="http://fastly.ink.sapo.pt/3.1.10/js/autoload.js"></script>
+<script src="http://cdn.ink.sapo.pt/3.1.10/js/modernizr.js"></script>
+<script>
+  Modernizr.load({
+    test: Modernizr.flexbox,
+    nope: 'http://cdn.ink.sapo.pt/3.1.10/css/ink-legacy.min.css',
+  });
+</script>
+<script title="VueScript">
+  new Vue({
+    el: '#app',
+    data: {
+      base64: null,
+      canvas: null,
+      context: null,
+      magnification: 4,
+      rectangles: [],
+      position: {x: 0, y: 0},
+      isGrayScale: false,
+      isBitwiseNot: false,
+      isMedian: false,
+      isMono: false,
+    },
+    mounted: function () {
+      this.canvas = document.getElementById('preview')
+      this.context = this.canvas.getContext('2d')
+    },
+    computed: {
+      outputJson: function () {
+        return JSON.stringify(this.rectangles, null, 2)
+      },
+    },
+    watch: {
+      rectangles: {
+        handler: async function (old_values, new_values) {
+          await this.drawBase(this.canvas, this.context)
+          this.drawRects(this.rectangles)
+        },
+        deep: true,
+      },
+      isGrayScale: {
+        handler: function (old_value, new_value) {
+          const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height)
+          this.grayScale(imageData.data)
+          this.context.putImageData(imageData, 0, 0);
+        }
+      },
+      isBitwiseNot: {
+        handler: function (old_value, new_value) {
+          const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height)
+          this.bitwiseNot(imageData.data)
+          this.context.putImageData(imageData, 0, 0);
+        }
+      },
+      isMedian: {
+        handler: function (old_value, new_value) {
+          const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height)
+          this.median(imageData.data)
+          this.context.putImageData(imageData, 0, 0);
+        }
+      },
+      isMono: {
+        handler: function (old_value, new_value) {
+          const imageData = this.context.getImageData(0, 0, this.canvas.width, this.canvas.height)
+          this.mono(imageData.data)
+          this.context.putImageData(imageData, 0, 0);
+        }
+      }
+    },
+    methods: {
+      // 初期化
+      flesh: function () {
+        this.base64 = null
+      },
+      // 選択ファイル変更時のイベントハンドル
+      onFileChange: async function (event) {
+        this.flesh()
+        let files = event.target.files || event.dataTransfer.files
+        await this.fileReader(files[0])
+        await this.drawBase(this.canvas, this.context)
+        this.drawRects(this.rectangles)
+      },
+      // 選択ファイルの読み取り
+      fileReader: function (file) {
+        return new Promise((resolve, reject) => {
+          let accept = {binary: ['image/png', 'image/jpeg']};
+          if (file !== null) {
+            if (accept.binary.indexOf(file.type) > -1) {
+              const reader = new FileReader()
+              reader.onload = (event) => {
+                this.base64 = event.target.result
+                resolve(event.target.result)
+              }
+              reader.readAsDataURL(file)
+            }
+          }
+        })
+      },
+      // canvas上のマウス位置の取得
+      //
+      // 画像の拡縮に合わせて倍率を入れている
+      onMouseMove: function (event) {
+        this.position.x = event.offsetX * this.magnification
+        this.position.y = event.offsetY * this.magnification
+      },
+      // 画像をcanvasに描く
+      drawBase: function (canvas, context, magnification = this.magnification) {
+        return new Promise(((resolve, reject) => {
+          let image = new Image()
+          image.src = this.base64
+          image.onload = (event) => {
+            let width = image.width / magnification;
+            let height = image.height / magnification;
+            canvas.width = width;
+            canvas.height = height;
+            context.drawImage(image, 0, 0, width, height);
+            resolve()
+          }
+        }))
+      },
+      // rectanglesの四角形を描く
+      drawRects: function (rects) {
+        for (const rect of rects) {
+          const vertices = rect.vertices
+          this.drawRect(
+            vertices[0].x,
+            vertices[0].y,
+            vertices[1].x - vertices[0].x,
+            vertices[1].y - vertices[0].y,
+            'purple', ''
+          )
+        }
+      },
+      // 四角形をcanvasに描く
+      drawRect: function (a, b, c, d, color, index = '') {
+        this.context.beginPath()
+        this.context.rect(
+          a / this.magnification,
+          b / this.magnification,
+          c / this.magnification,
+          d / this.magnification
+        )
+        this.context.strokeStyle = color
+        this.context.lineWidth = 2
+        this.context.stroke()
+        if (index) {
+          this.context.font = '10px serif'
+          this.context.fillStyle = '#404040'
+          this.context.textBaseline = 'top'
+          this.context.textAlign = 'left'
+          this.context.fillText(index, a / this.magnification, b / this.magnification)
+        }
+      },
+      // 四角形を追加
+      addRect: function () {
+        this.rectangles.push({id: '', vertices: {start: {x: 0, y: 0}, end: {x: 10, y: 10}}})
+      },
+      // 四角形の削除
+      deleteRect: function (index) {
+        this.rectangles.splice(index, 1);
+      },
+      // canvasのグレースケール
+      grayScale: function (data) {
+        for (let i = 0; i < data.length; i += 4) {
+          let g = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722
+          data[i] = data[i + 1] = data[i + 2] = g
+        }
+        return data
+      },
+      // canvasの色反転
+      bitwiseNot: function (data) {
+        for (let i = 0; i < data.length; i += 4) {
+          data[i] = 255 - data[i]
+          data[i + 1] = 255 - data[i + 1]
+          data[i + 2] = 255 - data[i + 2]
+        }
+        return data
+      },
+      // canvasのメディアンフィルタ
+      median: function (data, width) {
+        const _data = data.slice()
+        const getMedian = (color, i) => {
+          const prevLine = i - (width * 4)
+          const nextLine = i + (width * 4)
+          const colors = [
+            _data[prevLine - 4 + color], _data[prevLine + color], _data[prevLine + 4 + color],
+            _data[i - 4 + color], _data[i + color], _data[i + 4 + color],
+            _data[nextLine - 4 + color], _data[nextLine + color], _data[nextLine + 4 + color],
+          ]
+          colors.sort((a, b) => a - b)
+          return colors[Math.floor(colors.length / 2)]
+        }
+        for (let i = width * 4; i < data.length - (width * 4); i += 4) {
+          if (i % (width * 4) === 0 || i % ((width * 4) + 300) === 0) {
+            // nop
+          } else {
+            data[i] = getMedian(0, i)
+            data[i + 1] = getMedian(1, i)
+            data[i + 2] = getMedian(2, i)
+          }
+        }
+        return data
+      },
+      // canvasの2値化
+      mono: function (data) {
+        const threshold = 255 / 2
+        const getColor = (data, i) => {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
+          return threshold < avg ? 255 : 0
+        }
+        for (let i = 0; i < data.length; i += 4) {
+          const color = getColor(data, i)
+          data[i] = data[i + 1] = data[i + 2] = color
+        }
+        return data
+      },
+      onGrayScale: function () {
+        this.isGrayScale = true
+      },
+      onBitwiseNot: function () {
+        this.isBitwiseNot = !this.isBitwiseNot
+      },
+      onMedian: function () {
+        this.isMedian = !this.isMedian
+      },
+      onMono: function () {
+        this.isMono = !this.IsMono
+      },
+    }
+  })
+</script>
+</body>
+</html>
+
