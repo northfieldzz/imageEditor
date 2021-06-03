@@ -8,6 +8,6 @@ Ink Css Frameworkの練習
 
 
 
-This repository uses the following copyrighted works.
+### This repository uses the following copyrighted works.
 
 - Copyright (c) 2012 SAPO - PT Comunicações S.A.
